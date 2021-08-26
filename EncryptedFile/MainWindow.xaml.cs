@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,6 +16,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace EncryptedFile
 {
@@ -24,91 +26,153 @@ namespace EncryptedFile
     public partial class MainWindow : Window
     {
         private Thread threads = null;
-        private string fileName;
+        private string inputFile;
+        private string outputFile;
         public MainWindow()
         {
             InitializeComponent();
-            fileName = tbFilePath.Text; // in future need remove
+            inputFile = tbFilePath.Text; // in future need remove
+            outputFile = inputFile;
         }
-
         private void btnFile_Click(object sender, RoutedEventArgs e)
         {
             Microsoft.Win32.OpenFileDialog dlg = new Microsoft.Win32.OpenFileDialog();
-            dlg.FileName = "Document"; // Default file name
-            dlg.DefaultExt = ".txt"; // Default file extension
-            dlg.Filter = "Text documents (.txt)|*.txt"; // Filter files by extension
+            dlg.FileName = "Document";
+            dlg.DefaultExt = ".txt";
+            dlg.Filter = "Text documents (.txt)|*.txt";
 
-            // Show open file dialog box
             Nullable<bool> result = dlg.ShowDialog();
 
-            // Process open file dialog box results
             if (result == true)
             {
-                // Open document
-                fileName = dlg.FileName;
-                tbFilePath.Text = fileName;
+                inputFile = dlg.FileName;
+                tbFilePath.Text = inputFile;
             }
         }
-
-        private void EncryptFile()
+        public byte[] GenerateRandomSalt()
         {
-            byte[] readedBytes;
-            byte[] xoredBytes;
+            byte[] data = new byte[32];
 
-            using (var stream = new FileStream(fileName, FileMode.Open))
+            using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
             {
-                readedBytes = new byte[stream.Length];
-                xoredBytes = new byte[stream.Length];
-
-                stream.Read(readedBytes, 0, (int)stream.Length);
-
-                for (int i = 0; i < readedBytes.Length; i++)
+                for (int i = 0; i < 10; i++)
                 {
-                    progress.Value = i;
-                    int xoredInt = readedBytes[i] ^ Int32.Parse(tbPassword.Text);
-                    xoredBytes[i] = (byte)xoredInt;
+                    // Fille the buffer with the generated data
+                    rng.GetBytes(data);
                 }
             }
-            using (var stream = new FileStream(fileName, FileMode.Open))
+            return data;
+        }
+        private void FileEncrypt(object obj)
+        {
+            string password = (string)obj;
+            byte[] salt = GenerateRandomSalt();
+            FileStream fsCrypt = new FileStream(inputFile + ".aes", FileMode.Create);
+            byte[] passwordBytes = System.Text.Encoding.UTF8.GetBytes(password);
+            RijndaelManaged AES = new RijndaelManaged();
+            AES.KeySize = 256;
+            AES.BlockSize = 128;
+            AES.Padding = PaddingMode.PKCS7;
+            var key = new Rfc2898DeriveBytes(passwordBytes, salt, 50000);
+            AES.Key = key.GetBytes(AES.KeySize / 8);
+            AES.IV = key.GetBytes(AES.BlockSize / 8);
+            AES.Mode = CipherMode.CFB;
+            fsCrypt.Write(salt, 0, salt.Length);
+            CryptoStream cs = new CryptoStream(fsCrypt, AES.CreateEncryptor(), CryptoStreamMode.Write);
+            FileStream fsIn = new FileStream(inputFile, FileMode.Open);
+            byte[] buffer = new byte[1048576];
+            int read;
+            try
             {
-                stream.Write(xoredBytes, 0, xoredBytes.Length);
+                while ((read = fsIn.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    Application.Current.Dispatcher.Invoke(new Action(() =>
+                    {
+                        cs.Write(buffer, 0, read);
+                    }));
+                }
+                fsIn.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: " + ex.Message);
+            }
+            finally
+            {
+                cs.Close();
+                fsCrypt.Close();
             }
         }
-
-        private byte[] DecryptFileInMemory()
+        private void FileDecrypt(object obj)
         {
-            byte[] readedBytes;
-            byte[] xoredBytes;
-
-            using (var stream = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.Read))
+            string password = (string)obj;
+            byte[] passwordBytes = System.Text.Encoding.UTF8.GetBytes(password);
+            byte[] salt = new byte[32];
+            FileStream fsCrypt = new FileStream(inputFile, FileMode.Open);
+            fsCrypt.Read(salt, 0, salt.Length);
+            RijndaelManaged AES = new RijndaelManaged();
+            AES.KeySize = 256;
+            AES.BlockSize = 128;
+            var key = new Rfc2898DeriveBytes(passwordBytes, salt, 50000);
+            AES.Key = key.GetBytes(AES.KeySize / 8);
+            AES.IV = key.GetBytes(AES.BlockSize / 8);
+            AES.Padding = PaddingMode.PKCS7;
+            AES.Mode = CipherMode.CFB;
+            CryptoStream cs = new CryptoStream(fsCrypt, AES.CreateDecryptor(), CryptoStreamMode.Read);
+            FileStream fsOut = new FileStream(outputFile, FileMode.Create);
+            int read;
+            byte[] buffer = new byte[1048576];
+            try
             {
-                readedBytes = new byte[stream.Length];
-                xoredBytes = new byte[stream.Length];
-
-                stream.Read(readedBytes, 0, (int)stream.Length);
-
-                for (int i = 0; i < readedBytes.Length; i++)
+                while ((read = cs.Read(buffer, 0, buffer.Length)) > 0)
                 {
-                    int xoredInt = readedBytes[i] ^ Int32.Parse(tbPassword.Text);
-                    xoredBytes[i] = (byte)xoredInt;
+                    Application.Current.Dispatcher.Invoke(new Action(() =>
+                    {
+                        fsOut.Write(buffer, 0, read);
+                    }));
                 }
             }
-
-            return xoredBytes;
+            catch (CryptographicException ex_CryptographicException)
+            {
+                Console.WriteLine("CryptographicException error: " + ex_CryptographicException.Message);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: " + ex.Message);
+            }
+            try
+            {
+                cs.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error by closing CryptoStream: " + ex.Message);
+            }
+            finally
+            {
+                fsOut.Close();
+                fsCrypt.Close();
+            }
         }
 
         private void WorkWithFile()
         {
             if ((bool)rbEncrypted.IsChecked)
             {
+
                 rbDecrypted.IsChecked = false;
-                threads = new Thread(EncryptFile);
+                threads = new Thread(FileEncrypt);
                 threads.IsBackground = true;
-                threads.Start();
+                threads.Start(tbPassword.Text);
+                progress.Value = 100;
             }
             else if ((bool)rbDecrypted.IsChecked)
             {
                 rbEncrypted.IsChecked = false;
+                threads = new Thread(FileDecrypt);
+                threads.IsBackground = true;
+                threads.Start(tbPassword);
+                progress.Value = 100;
             }
             else
             {
@@ -118,9 +182,7 @@ namespace EncryptedFile
 
         private void btnStart_Click(object sender, RoutedEventArgs e)
         {
-            threads = new Thread(WorkWithFile);
-            threads.IsBackground = true;
-            threads.Start();
+            WorkWithFile();
         }
 
         private void btnStop_Click(object sender, RoutedEventArgs e)
