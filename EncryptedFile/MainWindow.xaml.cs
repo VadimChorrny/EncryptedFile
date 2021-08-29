@@ -106,18 +106,27 @@ namespace EncryptedFile
         private void FileDecrypt(object obj)
         {
             string password = (string)obj;
+
             byte[] passwordBytes = System.Text.Encoding.UTF8.GetBytes(password);
             byte[] salt = new byte[32];
+
             FileStream fsCrypt = new FileStream(inputFile, FileMode.Open);
+
             fsCrypt.Read(salt, 0, salt.Length);
+
             RijndaelManaged AES = new RijndaelManaged();
+
             AES.KeySize = 256;
             AES.BlockSize = 128;
+
             var key = new Rfc2898DeriveBytes(passwordBytes, salt, 50000);
+
             AES.Key = key.GetBytes(AES.KeySize / 8);
             AES.IV = key.GetBytes(AES.BlockSize / 8);
+
             AES.Padding = PaddingMode.PKCS7;
             AES.Mode = CipherMode.CFB;
+
             CryptoStream cs = new CryptoStream(fsCrypt, AES.CreateDecryptor(), CryptoStreamMode.Read);
             FileStream fsOut = new FileStream(outputFile, FileMode.Create);
             int read;
@@ -154,24 +163,19 @@ namespace EncryptedFile
                 fsCrypt.Close();
             }
         }
-
         private void WorkWithFile()
         {
             if ((bool)rbEncrypted.IsChecked)
             {
 
                 rbDecrypted.IsChecked = false;
-                threads = new Thread(FileEncrypt);
-                threads.IsBackground = true;
-                threads.Start(tbPassword.Text);
+                ThreadPool.QueueUserWorkItem(FileEncrypt,tbPassword.Text);
                 progress.Value = 100;
             }
             else if ((bool)rbDecrypted.IsChecked)
             {
                 rbEncrypted.IsChecked = false;
-                threads = new Thread(FileDecrypt);
-                threads.IsBackground = true;
-                threads.Start(tbPassword);
+                ThreadPool.QueueUserWorkItem(FileDecrypt,tbPassword.Text);
                 progress.Value = 100;
             }
             else
@@ -179,12 +183,10 @@ namespace EncryptedFile
                 MessageBox.Show("You don't select radio button!");
             }
         }
-
         private void btnStart_Click(object sender, RoutedEventArgs e)
         {
             WorkWithFile();
         }
-
         private void btnStop_Click(object sender, RoutedEventArgs e)
         {
             threads.Join();
